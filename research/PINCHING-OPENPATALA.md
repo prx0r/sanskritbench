@@ -1,6 +1,6 @@
 # PINCHING OPENPATALA — how the openpatala corpus engine feeds the sanskritbenchy benchmark
 
-*2026-08-16 · An objective brainstorm: `/root/openpatalaproject` is a SEPARATE autonomous Sanskrit corpus
+*2026-08-16 · An objective brainstorm: `/root/openpatala` is a SEPARATE autonomous Sanskrit corpus
 engine (the huge ingestor + normalizer of Devanagari works). It is NOT the benchmark — but it produces
 exactly the input the benchmark's school/period moat needs. This doc maps what openpatala already has,
 what we can adopt verbatim (tools/processes), and how it unblocks `DEV-PLAN-WITH-GPU` G6 (the *vimarśa*

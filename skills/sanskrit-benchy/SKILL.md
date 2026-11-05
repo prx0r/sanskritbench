@@ -1,6 +1,6 @@
 ---
 name: sanskrit-benchy
-description: "Drive the Sanskrit benchmark science lab: run experiments, hypotheses, Kendall's-tau validation, Pāṭala proofs, re-render + fine-tune, and the watchdog — all kanban-aware, all verified. Use this skill whenever working in /root/sanskritbenchy."
+description: "Drive the Sanskrit benchmark science lab: run experiments, hypotheses, Kendall's-tau validation, Pāṭala proofs, re-render + fine-tune, and the watchdog — all kanban-aware, all verified. Use this skill whenever working in /root/sanskritbench."
 version: 2.0.0
 date: 2026-08-16
 author: sanskritbenchy
@@ -14,7 +14,7 @@ metadata:
 
 # Sanskrit Benchmark Science Lab (sanskritbenchy)
 
-You are driving the lab at `/root/sanskritbenchy`. **The ONE RULE: nothing is real unless it is a logged,
+You are driving the lab at `/root/sanskritbench`. **The ONE RULE: nothing is real unless it is a logged,
 content-addressed number on fixed gold, passed by a deterministic gate.** Your job is not to be clever — it
 is to run the right step, read the logged result, and never claim more than the gate proves.
 
@@ -112,7 +112,7 @@ is to run the right step, read the logged result, and never claim more than the 
 ## 3. THE STANDARD WORKFLOW (every session)
 
 ```bash
-cd /root/sanskritbenchy
+cd /root/sanskritbench
 python3 check.py --status                 # 1. gate
 python3 agent/ramwatch.py                 # 2. box safety
 python3 agent/run.py --step checkpoints   # 3. what's next

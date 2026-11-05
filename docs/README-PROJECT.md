@@ -2,7 +2,7 @@
 
 > **⚠️ REPOSITORY:** This is the **`sanskritbenchy`** project (the Sanskrit-benchmark science lane). It is a
 > **separate standalone repo** — do **NOT** push it to `smellycock` (which is the translation-focused
-> patalaorg reference). Live at `/root/sanskritbenchy`.
+> patalaorg reference). Live at `/root/sanskritbench`.
 
 *2026-08-16 · The clean, **all-inclusive and standalone** project for the **Sanskrit-benchmark science**
 lane. Self-contained: full lab code (`pipeline/` + `tools/`), gold data (`data/`), adopted toolkits
@@ -159,7 +159,7 @@ The cloned repos under `patalacheckpoints/source-evidence/repos/` we adopt:
 ## 7. HOW TO RUN (the science method — all from this repo)
 
 ```bash
-cd /root/sanskritbenchy
+cd /root/sanskritbench
 
 # the fixed gold control
 PYTHONPATH=. python3 pipeline/sanskrit_gold.py
