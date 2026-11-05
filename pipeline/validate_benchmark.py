@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""pipeline/validate_benchmark.py — PROVE the benchmark is scientifically better (Kendall's tau).
+"""pipeline/validate_benchmark.py — SMOKE-TEST the benchmark plumbing (Kendall's tau-b).
 
-THE VISION: our benchmark (per-tradition × quality × proof × cost) is scientifically better than the
-existing Sanskrit benchmarks (Sāmayik/Itihāsa use BLEU/chrF). To PROVE it (not assert it), we use the
-WMT-standard protocol: a metric is good if it RANKS translations the way a human judge ranks them.
+NOT a proof of human correlation: 3×3 with a same-model LLM proxy judge is a
+wiring check only. Human validation needs blinded human ratings on a consented,
+held-out set (see TECHNICAL-SPEC §4). MODEL_PROXY labels below are deliberate.
 
-Protocol (per research/PROOF-OF-TRANSLATION.md + the WMT meta-evaluation method):
-  1. Take N Sanskrit verses from the gold (Mitrasamgraha).
-  2. Produce M translations per verse (diverse models/configs → different qualities).
-  3. Have the LLM-judge rank/score each candidate's semantic quality (the "human" signal).
-  4. For each AUTOMATIC metric (chrF, bleu1, combined, proof-gate, semantic-judge):
-       rank the M candidates by that metric, rank them by the judge, compute KENDALL'S TAU.
-  5. The metric with the highest tau correlates best with human judgment → it is the better metric,
-     and the benchmark built on it is scientifically better.
+Protocol (WMT-shaped, proxy only):
+  1. Take N verses from the gold loader.
+  2. Produce M candidate translations per verse (diverse configs).
+  3. Have the MODEL_PROXY judge rank candidates pairwise (reference + candidates,
+     no Sanskrit shown — limitation, not human judgment).
+  4. Rank M candidates by each automatic metric and by the proxy; tau-b per verse.
+  5. Higher proxy-tau = ranks more like the proxy — nothing about humans.
 
 A positive, higher tau for our combined/quality metric vs raw chrF/bleu = the PROOF.
 
@@ -69,22 +68,37 @@ def judge_rank_pairwise(model: str, gold: str, candidates: list[str]) -> list[fl
 
 
 def kendall_tau(rank_a: list[float], rank_b: list[float]) -> float:
-    """Kendall's tau-b rank correlation between two orderings (the WMT meta-eval standard).
-    Returns -1..1. Handles ties. Higher = the metric ranks translations like the human/judge."""
+    """Kendall's tau-b rank correlation (WMT meta-eval standard, SciPy definition).
+
+    Ties in either ranking shrink the denominator; they are NOT dropped.
+    Returns nan when undefined (n<2, all pairs tied, or one side constant) —
+    callers must skip nan, never treat it as 0 = "no correlation".
+    Verified: kendall_tau([1,1,2],[1,2,3]) ≈ 0.8165 (tau-b); all-tied → nan.
+    """
+    import math
     if len(rank_a) != len(rank_b) or len(rank_a) < 2:
-        return 0.0
+        return float("nan")
     n = len(rank_a)
-    concordant = discordant = 0
+    concordant = discordant = ties_a_only = ties_b_only = ties_both = 0
     for i in range(n):
         for j in range(i + 1, n):
             da = rank_a[i] - rank_a[j]
             db = rank_b[i] - rank_b[j]
-            if da * db > 0:
+            if da == 0 and db == 0:
+                ties_both += 1
+            elif da == 0:
+                ties_a_only += 1
+            elif db == 0:
+                ties_b_only += 1
+            elif da * db > 0:
                 concordant += 1
-            elif da * db < 0:
+            else:
                 discordant += 1
-    pairs = concordant + discordant
-    return (concordant - discordant) / pairs if pairs else 0.0
+    denom = math.sqrt((concordant + discordant + ties_a_only) *
+                      (concordant + discordant + ties_b_only))
+    if denom == 0:
+        return float("nan")
+    return (concordant - discordant) / denom
 
 
 def _combo(chrf_val, bleu_val, sem_val):
@@ -121,9 +135,9 @@ def produce_candidates(source: str, n: int, model: str, max_chars: int = 400) ->
 
 def validate(n_verses: int, m_cands: int, test: str, model: str, dry_run: bool) -> int:
     rows = TEST_SOURCES[test]["load"]()[:n_verses]
-    print(f"=== VALIDATE benchmark (Kendall's tau vs judge) ===")
+    print(f"=== VALIDATE benchmark plumbing (tau-b vs MODEL_PROXY judge) ===")
     print(f"  {n_verses} verses × {m_cands} candidate translations each, model={model}")
-    print(f"  proving: which metric ranks translations most like the human judge?")
+    print(f"  smoke-test only: which metric ranks most like the proxy judge?")
 
     # collect per-verse: {gold, candidates, judge_scores, metric_scores}
     tau_scores = {m: [] for m in ["chrF", "bleu1", "semantic", "combined"]}
@@ -135,7 +149,9 @@ def validate(n_verses: int, m_cands: int, test: str, model: str, dry_run: bool) 
         cands = [c for c in cands if c]  # drop failures
         if len(cands) < 2:
             print(f"  [verse {vi+1}] only {len(cands)} candidate(s) — skipping"); continue
-        # the judge RANKS the candidates pairwise (forces a total order — no saturation)
+        # the MODEL_PROXY judge RANKS the candidates pairwise (forces a total order).
+    # Limitation (do not relabel as human): judge sees reference + candidates,
+    # never the Sanskrit; same model family may generate, judge, and score.
         judge = judge_rank_pairwise(model, v["gold"], cands)
         chrf_s = []; bleu_s = []; sem_s = []; combo_s = []
         for c in cands:
@@ -144,52 +160,66 @@ def validate(n_verses: int, m_cands: int, test: str, model: str, dry_run: bool) 
             bleu_s.append(bleu1(v["gold"], c))
             sem_s.append(fid)
             combo_s.append(_combo(chrf_s[-1], bleu_s[-1], fid))
-        # tau of each metric vs the judge's ranking
+        # tau of each metric vs the proxy ranking (nan = undefined, skipped)
+        import math
         for name, scores in [("chrF", chrf_s), ("bleu1", bleu_s),
                              ("semantic", sem_s), ("combined", combo_s)]:
             tau = kendall_tau(scores, judge)
+            if isinstance(tau, float) and math.isnan(tau):
+                print(f"  [verse {vi+1}] {name}: tau=undefined (tied/constant)")
+                continue
             tau_scores[name].append(tau)
-            print(f"  [verse {vi+1}] {name}: tau={tau:+.3f} (judge={judge})")
+            print(f"  [verse {vi+1}] {name}: tau={tau:+.3f} (proxy={judge})")
 
     if dry_run:
         return 0
 
-    print("\n=== KENDALL'S TAU SUMMARY (higher = metric correlates better with human/judge) ===")
-    print(f"{'metric':10} {'avg tau':>9} {'signif'}  → proves benchmark quality")
+    print("\n=== TAU-B SUMMARY vs MODEL_PROXY (plumbing only, not human proof) ===")
+    print(f"{'metric':10} {'avg tau':>9}  (nan skipped; undefined = tied/constant)")
     print("-" * 55)
     results = {}
     for name, taus in tau_scores.items():
-        avg = sum(taus) / len(taus) if taus else 0.0
+        import math
+        scored = [t for t in taus if not (isinstance(t, float) and math.isnan(t))]
+        avg = (sum(scored) / len(scored)) if scored else float("nan")
         results[name] = avg
-        print(f"{name:10} {avg:+.3f}")
+        tag = f"{avg:+.3f} (n={len(scored)})" if scored else "undefined"
+        print(f"{name:10} {tag}")
 
-    # the scientific claim
-    best = max(results, key=results.get)
-    baseline = results.get("chrF", 0)
-    claim = results[best] > baseline
+    # the plumbing claim (never "scientifically better" without human gold)
+    import math
+    def _val(x):
+        return x if isinstance(x, float) and not math.isnan(x) else float("-inf")
+    best = max(results, key=lambda k: _val(results[k]))
+    baseline = results.get("chrF", float("nan"))
+    claim = (not math.isnan(results[best]) and not math.isnan(baseline)
+             and results[best] > baseline)
     if claim:
-        print(f"\n  ✓ {best} correlates with human judgment BETTER than raw chrF "
-              f"({results[best]:+.3f} vs {baseline:+.3f})")
-        print(f"  → the combined/quality benchmark is SCIENTIFICALLY BETTER (evidence, not assertion)")
+        print(f"\n  ✓ {best} ranks more like the MODEL_PROXY than raw chrF "
+              f"({results[best]:+.3f} vs {baseline:+.3f}) — plumbing signal only")
     else:
-        print(f"\n  ✗ raw chrF still wins — need a better quality metric")
+        print(f"\n  ✗ no proxy win — plumbing only, no human conclusion")
 
-    # THE ONE RULE: the tau is real only as a content-addressed run record on fixed gold (run_recorder).
+    # THE ONE RULE: numbers are real only as content-addressed run records.
+    # Gold here = actual loaded rows (source+gold), never a test descriptor.
     from run_recorder import RunRecorder
-    gold = [{"test": test, "n_verses": n_verses, "m_candidates": m_cands, "model": model}]
+    gold = [{"source": v.get("source", ""), "gold": v.get("gold", "")} for v in rows]
     rr = RunRecorder()
     rec = rr.record(
         step="validate_benchmark", gold=gold,
-        config={"test": test, "n": n_verses, "m": m_cands, "model": model},
-        metrics={"tau": results, "best_metric": best, "beats_chrF": claim,
-                 "chrF_tau": baseline, "best_tau": results[best]},
-        raw=[{"metric": k, "tau": round(float(sum(v) / len(v)), 4) if v else 0.0}
-             for k, v in tau_scores.items()],
-        assertion=f"metric '{best}' Kendall-tau ({results[best]:+.3f}) {'>' if claim else '<='} chrF ({baseline:+.3f}) "
-                  "on fixed gold ⇒ benchmark is scientifically better iff beats_chrF",
+        config={"test": test, "n": n_verses, "m": m_cands, "model": model,
+                "judge": "MODEL_PROXY(pairwise,same-model,reference-only)"},
+        metrics={"tau_proxy": {k: (None if isinstance(v, float) and math.isnan(v) else v)
+                               for k, v in results.items()},
+                 "best_metric": best, "beats_chrF_proxy": claim},
+        raw=[{"metric": k, "tau_proxy": (None if isinstance(v, float) and math.isnan(v) else v),
+              "n_scored": len(tau_scores[k])}
+             for k, v in results.items()],
+        assertion=f"SMOKE ONLY: proxy-tau best='{best}' beats_chrF_proxy={claim} "
+                  f"on {len(gold)} rows (no human claim)",
     )
     print(f"\n  content-addressed run: {rec['run_signature']} (kind={rec['kind']})")
-    print(f"  => {'Phase 1 gate PASSED' if claim else 'Phase 1 gate NOT YET MET'}")
+    print(f"  => {'proxy smoke PASSED' if claim else 'proxy smoke: no win'} (not a human gate)")
     return 0 if claim else 1
 
 

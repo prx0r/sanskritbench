@@ -108,16 +108,30 @@ class RunRecorder:
                evidence_code: str = "ECO:0000203", verified: bool = False) -> dict:
         """Record one run. Returns the run record (signature, out.hash, nanopublication).
 
-        verified=True marks the result as VERIFIED (derived AND passed a deterministic gate) — the
-        strongest eigenius kind. Default is DERIVED (computed on fixed gold).
+        Immutability: the input-signature file `{sig}.json` is first-write-wins
+        and NEVER overwritten. A rerun with the same inputs but different outputs
+        writes `{sig}.{out_hash[:12]}.json` + records `supersedes` linkage, so
+        stochastic reruns stay individually retrievable. Raw outputs: full hash
+        + count always recorded; body stores all rows when small, else first 20
+        with explicit truncation note (never silent).
+
+        verified=True marks VERIFIED (derived AND passed a deterministic gate).
+        Default is DERIVED (computed on fixed gold).
         """
         sig = run_signature(gold, config)
-        # hash the OUTPUT too (metrics + raw) — out.hash
-        out_hash = sha256({"metrics": metrics, "raw": raw or []})
+        raw = raw or []
+        # hash the OUTPUT too (metrics + FULL raw) — out.hash covers everything
+        out_hash = sha256({"metrics": metrics, "raw": raw})
+        raw_hash = sha256(raw)
+        truncated = len(raw) > 20
         record = {
             "step": step, "run_signature": sig, "out_hash": out_hash,
+            "exec_id": f"{sig[:12]}.{out_hash[:12]}",
             "gold_hash": gold_hash(gold), "code_sha": code_sha(), "config_sha": config_sha(config),
-            "config": config, "metrics": metrics, "raw_outputs": (raw or [])[:20],
+            "config": config, "metrics": metrics,
+            "raw_outputs": raw if not truncated else raw[:20],
+            "raw_total": len(raw), "raw_hash": raw_hash,
+            "raw_truncated": truncated,
             "git": git_state(),
             "ts": datetime.now(timezone.utc).isoformat(),
             # nanopublication: every headline number carries assertion + evidence + provenance
@@ -131,6 +145,21 @@ class RunRecorder:
             },
         }
         out_file = self.runs_dir / f"{sig}.json"
+        if out_file.exists():
+            try:
+                prior = json.loads(out_file.read_text())
+            except Exception:
+                prior = None
+            if prior and prior.get("out_hash") != out_hash:
+                # same inputs, different outputs: keep both, link them
+                record["supersedes_note"] = (
+                    f"input-signature {sig[:12]} reran with different outputs; "
+                    f"prior out {str(prior.get('out_hash'))[:12]} preserved in {out_file.name}")
+                variant = self.runs_dir / f"{sig}.{out_hash[:12]}.json"
+                variant.write_text(json.dumps(record, ensure_ascii=False, indent=2))
+                return record
+            if prior and prior.get("out_hash") == out_hash:
+                return prior  # identical rerun: return existing, no duplicate write
         out_file.write_text(json.dumps(record, ensure_ascii=False, indent=2))
         return record
 
